@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,6 +8,7 @@ import torchvision.datasets as dset
 from pycocotools.coco import COCO
 from PIL import Image
 from model import TexTok
+from tqdm import tqdm
 
 class COCODataset(torch.utils.data.Dataset):
     def __init__(self, img_dir, ann_file, transform=None, tokenizer_model='t5-base', device='cpu'):
@@ -36,13 +38,16 @@ class COCODataset(torch.utils.data.Dataset):
         return image, caption
 
 def train(model, dataloader, optimizer, criterion, device, num_epochs=10):
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
     model.to(device)
     model.train()
     
     for epoch in range(num_epochs):
         total_loss = 0.0
-        
-        for images, captions in dataloader:
+        print("starting epoch", epoch)
+        for images, captions in tqdm(dataloader):
             # pdb.set_trace()
             images =images.to(device)
             optimizer.zero_grad()
@@ -56,6 +61,16 @@ def train(model, dataloader, optimizer, criterion, device, num_epochs=10):
         
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
+        # Save checkpoint
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pth")
+        torch.save({
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': total_loss
+        }, checkpoint_path)
+        print(f"Checkpoint saved: {checkpoint_path}")
+
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -68,10 +83,10 @@ if __name__ == "__main__":
     ])
 
     dataset = COCODataset(img_dir="/home/tchoudha/coco2017/val2017",
-                                 ann_file="/home/tchoudha/coco2017/annotations/captions_val2017.json", 
-                                 transform=transform,
-                                 device = device) #COCODataset
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+                            ann_file="/home/tchoudha/coco2017/annotations/captions_val2017.json", 
+                            transform=transform,
+                            device = device) #COCODataset
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, drop_last=True)
     
     model = TexTok( patch_size = 16, #8 for image size 256, and 16 for image size 512
                     batch_size = batch_size, 

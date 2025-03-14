@@ -1,11 +1,16 @@
 import torch
 from torch import nn
 import timm
-from timm.models.vision_transformer import VisionTransformer
+# from timm.models.vision_transformer import VisionTransformer
+from functools import partial
+import math
+
+from torchvision.models.vision_transformer import VisionTransformer, Encoder
 from einops.layers.torch import Rearrange
 from einops import rearrange, repeat, pack, unpack
 from transformers import T5Tokenizer, T5EncoderModel
 
+import pdb
 
 def divisible_by(num, den):
     return (num % den) == 0
@@ -16,7 +21,7 @@ def pack_square_height_width(t):
 
 def unpack_square_height_width(t):
     assert t.ndim == 3
-    hw = int(sqrt(t.shape[1]))
+    hw = int(math.sqrt(t.shape[1]))
     return rearrange(t, 'b (h w) d -> b h w d', h = hw, w = hw)
 
 
@@ -44,6 +49,8 @@ class TexTok(nn.Module):
         self.num_tokens = num_tokens
         self.num_text_tokens = 32
         self.text_token_dim = 512
+        self.mlp_dim = 3072
+        self.seq_length = self.num_patches + self.num_tokens + self.num_text_tokens #1184
 
         self.device = device
 
@@ -60,25 +67,43 @@ class TexTok(nn.Module):
         self.text_proj_enc = nn.Linear(self.text_token_dim, hidden_size) 
 
         # Positional embeddings
-        self.pos_emb = nn.Parameter(torch.zeros(self.num_patches + self.num_tokens + self.num_text_tokens, hidden_size))
+        self.pos_emb = nn.Parameter(torch.zeros(self.seq_length, hidden_size))
 
         # Tokenizer (Encoder) ViT
-        # self.encoder = VisionTransformer(img_size=image_size, patch_size=patch_size, embed_dim=hidden_size, depth=self.depth, num_heads=self.num_heads, num_classes=0)
-        vit_model_encoder = timm.create_model(model_name='vit_base_patch16_224', pretrained=True)
-        self.encoder_transformer = vit_model_encoder.blocks
-        self.encoder_norm = vit_model_encoder.norm
-        self.encoder_head = vit_model_encoder.head
+        # self.vit = VisionTransformer(img_size=image_size, patch_size=patch_size, embed_dim=hidden_size, depth=self.depth, num_heads=self.num_heads, num_classes=0)
+        # vit_model_encoder = timm.create_model(model_name='vit_base_patch16_224', pretrained=False)
+        self.encoder = Encoder(
+            seq_length = self.seq_length,
+            num_layers = self.depth,
+            num_heads = self.num_heads,
+            hidden_dim = hidden_size,
+            mlp_dim = self.mlp_dim,
+            dropout = 0.0,
+            attention_dropout = 0.0,
+            norm_layer = partial(nn.LayerNorm, eps=1e-6),
+        )
+        # self.encoder_norm = vit_model_encoder.norm
+        # self.encoder_head = vit_model_encoder.head
 
         # Linear projection to output image tokens (N x d)
         self.token_out_proj = nn.Linear(hidden_size, latent_dim)
 
         # Detokenizer (Decoder) ViT
         # self.decoder = VisionTransformer(img_size=image_size, patch_size=patch_size, embed_dim=hidden_size, depth=self.depth, num_heads=self.num_heads, num_classes=0)
-        vit_model_decoder = timm.create_model(model_name='vit_base_patch16_224', pretrained=True)
-        self.decoder_transformer = vit_model_decoder.blocks
-        self.decoder_norm = vit_model_decoder.norm
-        self.decoder_head = vit_model_decoder.head
-
+        # vit_model_decoder = timm.create_model(model_name='vit_base_patch16_224', pretrained=False)
+        # self.decoder_transformer = vit_model_decoder.blocks
+        # self.decoder_norm = vit_model_decoder.norm
+        # self.decoder_head = vit_model_decoder.head
+        self.decoder = Encoder(
+            seq_length = self.seq_length,
+            num_layers = self.depth,
+            num_heads = self.num_heads,
+            hidden_dim = hidden_size,
+            mlp_dim = self.mlp_dim,
+            dropout = 0.0,
+            attention_dropout = 0.0,
+            norm_layer = partial(nn.LayerNorm, eps=1e-6),
+        )
         # Learnable patch tokens (hw x D)
         self.patch_tokens = nn.Parameter(torch.randn(self.num_patches, hidden_size))
         
@@ -133,12 +158,14 @@ class TexTok(nn.Module):
 
         tokenizer_input = torch.cat([img_patches, img_learnable, text_proj_enc], dim=1) #B x (hw + N + N_t) x D
 
-        pos_emb = repeat(self.pos_emb, 'N D -> B N D', B = self.batch_size)
+        pos_emb = repeat(self.pos_emb, 'N D -> B N D', B = tokenizer_input.shape[0])
+        
         tokenizer_input = tokenizer_input + pos_emb
         
-        tokenizer_output = self.encoder_transformer(tokenizer_input) #B x (hw + N + N_t) x D
-        tokenizer_output = self.encoder_norm(tokenizer_output)
-        tokenizer_output = self.encoder_head(tokenizer_output)
+        tokenizer_output = self.encoder(tokenizer_input)
+        # tokenizer_output = self.encoder_transformer(tokenizer_input) #B x (hw + N + N_t) x D
+        # tokenizer_output = self.encoder_norm(tokenizer_output)
+        # tokenizer_output = self.encoder_head(tokenizer_output)
         
         # Retain only the learned image tokens
         image_tokens = self.token_out_proj(tokenizer_output[:, self.num_patches:self.num_patches + self.num_tokens, :]) #B x N x d
@@ -151,9 +178,10 @@ class TexTok(nn.Module):
 
         detokenizer_input = torch.cat([patch_tokens, image_token_proj, text_proj_dec], dim=1)  #B x (hw + N + N_t) x D
 
-        detokenizer_output = self.decoder_transformer(detokenizer_input)
-        detokenizer_output = self.decoder_norm(detokenizer_output)
-        detokenizer_output = self.decoder_head(detokenizer_output)
+        detokenizer_output = self.decoder(tokenizer_input)
+        # detokenizer_output = self.decoder_transformer(detokenizer_input)
+        # detokenizer_output = self.decoder_norm(detokenizer_output)
+        # detokenizer_output = self.decoder_head(detokenizer_output)
 
         # Retain only the learned patch tokens and reconstruct the image
         reconstructed_patches = detokenizer_output[:, :self.num_patches, :] #B x hw x D
