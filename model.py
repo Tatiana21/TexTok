@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-import timm
+# import timm
 # from timm.models.vision_transformer import VisionTransformer
 from functools import partial
 import math

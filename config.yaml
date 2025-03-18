@@ -1,0 +1,33 @@
+image_size: 256
+patch_size: 8 #for 256 × 256 image resolution and 16 for 512 × 512
+latent_dim: 8
+num_tokens: 128
+
+ViT_hidden_size: 768
+ViT_number_of_layers: 12
+ViT_number_of_heads: 12
+ViT_MLP_dimensions: 3072
+
+
+recon_loss_weight: 1.0
+
+use_gan: False
+Discriminator base channels: 128
+Discriminator channel multipliers: [1, 2, 4, 4, 4, 4] #for 256 × 256 image resolution, and [0.5, 1, 2, 4, 4, 4, 4] for 512 × 512.
+Discriminator starting iterations: 80000
+adversarial_loss_weight: 0.1
+grad_penalty_loss_weight: 10
+
+use_vgg: True
+perceptual_loss_weight: 0.1
+
+LeCAM weight: 0.0001 #Not implemented
+
+peak_learning_rate: 1e-4
+
+EMA_model_decay_rate: 0.999
+EMA_every_step: 100
+training epochs: 270
+batch_size: 16
+warmup_steps: 1000
+num_epochs: 10
