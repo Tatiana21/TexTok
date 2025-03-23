@@ -1,7 +1,7 @@
 image_size: 256
 patch_size: 8 #for 256 × 256 image resolution and 16 for 512 × 512
 latent_dim: 8
-num_tokens: 128
+num_tokens: 64
 
 ViT_hidden_size: 768
 ViT_number_of_layers: 12

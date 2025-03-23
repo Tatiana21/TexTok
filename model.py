@@ -70,8 +70,6 @@ class TexTok(nn.Module):
         self.pos_emb = nn.Parameter(torch.zeros(self.seq_length, hidden_size))
 
         # Tokenizer (Encoder) ViT
-        # self.vit = VisionTransformer(img_size=image_size, patch_size=patch_size, embed_dim=hidden_size, depth=self.depth, num_heads=self.num_heads, num_classes=0)
-        # vit_model_encoder = timm.create_model(model_name='vit_base_patch16_224', pretrained=False)
         self.encoder = Encoder(
             seq_length = self.seq_length,
             num_layers = self.depth,
@@ -82,18 +80,11 @@ class TexTok(nn.Module):
             attention_dropout = 0.0,
             norm_layer = partial(nn.LayerNorm, eps=1e-6),
         )
-        # self.encoder_norm = vit_model_encoder.norm
-        # self.encoder_head = vit_model_encoder.head
 
         # Linear projection to output image tokens (N x d)
         self.token_out_proj = nn.Linear(hidden_size, latent_dim)
 
         # Detokenizer (Decoder) ViT
-        # self.decoder = VisionTransformer(img_size=image_size, patch_size=patch_size, embed_dim=hidden_size, depth=self.depth, num_heads=self.num_heads, num_classes=0)
-        # vit_model_decoder = timm.create_model(model_name='vit_base_patch16_224', pretrained=False)
-        # self.decoder_transformer = vit_model_decoder.blocks
-        # self.decoder_norm = vit_model_decoder.norm
-        # self.decoder_head = vit_model_decoder.head
         self.decoder = Encoder(
             seq_length = self.seq_length,
             num_layers = self.depth,
@@ -112,7 +103,6 @@ class TexTok(nn.Module):
         self.text_proj_dec = nn.Linear(self.text_token_dim, hidden_size)
         
         # Reconstruction head
-        # self.reconstruction_head = nn.ConvTranspose2d(hidden_size, in_chans, kernel_size=patch_size, stride=patch_size)
 
         self.tokens_to_image = nn.Sequential(
             nn.Linear(hidden_size, 3 * patch_size * patch_size),
@@ -137,23 +127,18 @@ class TexTok(nn.Module):
 
         return encoded
 
-
-
-    def forward(self, input):
-        
+    def encode(self, input):
         # Tokenizer
-        img = input["image"]
 
         # 1) image patch tokens P ∈ R^hw×D from patchifying and flattening the input image with a projection layer
         img_patches = self.image_to_tokens(input["image"]) # B x h x w x D = 16 x 32 x 32 x 768
         img_patches = pack_square_height_width(img_patches) # B x hw x D = 16 x 1024 x 768
 
         # 2)  N randomly-initialized learnable image token 
-        img_learnable = self.image_tokens.expand(img.size(0), -1, -1) #B x N x D = 16 x N  x 768
+        img_learnable = self.image_tokens.expand(input["image"].size(0), -1, -1) #B x N x D = 16 x N  x 768
         
         # 3) linearly projected text tokens
         text_embd = self.text_embeder(input["text"], max_length = self.num_text_tokens, device = self.device).to(self.device)
-        
         text_proj_enc = self.text_proj_enc(text_embd)  # (B, Nt, D)
 
         tokenizer_input = torch.cat([img_patches, img_learnable, text_proj_enc], dim=1) #B x (hw + N + N_t) x D
@@ -161,27 +146,23 @@ class TexTok(nn.Module):
         pos_emb = repeat(self.pos_emb, 'N D -> B N D', B = tokenizer_input.shape[0])
         
         tokenizer_input = tokenizer_input + pos_emb
-        
         tokenizer_output = self.encoder(tokenizer_input)
-        # tokenizer_output = self.encoder_transformer(tokenizer_input) #B x (hw + N + N_t) x D
-        # tokenizer_output = self.encoder_norm(tokenizer_output)
-        # tokenizer_output = self.encoder_head(tokenizer_output)
         
         # Retain only the learned image tokens
         image_tokens = self.token_out_proj(tokenizer_output[:, self.num_patches:self.num_patches + self.num_tokens, :]) #B x N x d
         
+        return image_tokens
+    
+    def decode(self, text, image_tokens):
 
-        # Detokenizer
-        patch_tokens = self.patch_tokens.expand(img.size(0), -1, -1) #B x hw x D
+        text_embd = self.text_embeder(text, max_length = self.num_text_tokens, device = self.device).to(self.device)
+        
+        patch_tokens = self.patch_tokens.expand(len(text), -1, -1) #B x hw x D
         image_token_proj = self.image_token_proj(image_tokens) #B x N x D
         text_proj_dec = self.text_proj_dec(text_embd) # (B, Nt, D)
 
         detokenizer_input = torch.cat([patch_tokens, image_token_proj, text_proj_dec], dim=1)  #B x (hw + N + N_t) x D
-
-        detokenizer_output = self.decoder(tokenizer_input)
-        # detokenizer_output = self.decoder_transformer(detokenizer_input)
-        # detokenizer_output = self.decoder_norm(detokenizer_output)
-        # detokenizer_output = self.decoder_head(detokenizer_output)
+        detokenizer_output = self.decoder(detokenizer_input)
 
         # Retain only the learned patch tokens and reconstruct the image
         reconstructed_patches = detokenizer_output[:, :self.num_patches, :] #B x hw x D
@@ -189,5 +170,15 @@ class TexTok(nn.Module):
         # reconstructed_img = self.reconstruction_head(reconstructed_patches.transpose(1, 2).reshape(img.shape[0], -1, self.h, self.w))
         reconstructed_patches = unpack_square_height_width(reconstructed_patches)
         reconstructed_img = self.tokens_to_image(reconstructed_patches) #B x H x W
+
+        return reconstructed_img
+    
+    def forward(self, input):
+        
+        # Tokenizer
+        image_tokens = self.encode(input) #B x N x d 
+
+        # Detokenizer
+        reconstructed_img = self.decode(input["text"], image_tokens) #B x H x W
 
         return image_tokens, reconstructed_img
