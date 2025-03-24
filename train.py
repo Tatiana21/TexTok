@@ -13,7 +13,8 @@ import torchvision.datasets as dset
 from pycocotools.coco import COCO
 from PIL import Image
 
-from model import TexTok
+# from model import TexTok
+from model_imageonly import ImgTok
 from losses import TotalLoss
 
 from tqdm import tqdm
@@ -121,7 +122,7 @@ if __name__ == "__main__":
                             device = device) #COCODataset
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, drop_last=True)
     
-    model = TexTok( patch_size = cfg['patch_size'], #8 for image size 256, and 16 for image size 512
+    model = ImgTok( patch_size = cfg['patch_size'], #8 for image size 256, and 16 for image size 512
                     batch_size = batch_size, 
                     image_size = image_size,
                     hidden_size = cfg['ViT_hidden_size'], 
